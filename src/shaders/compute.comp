@@ -3,19 +3,20 @@
 
 #define WORKGROUP_SIZE 32
 
-#define IS_CULLING_ORI true
+#define IS_CULLING_ORI false
 #define IS_CULLING_FRUST true
 #define IS_CULLING_DIST true
 
 #define TOLERANCE 0.2f
-#define MAX_DIST 50.f
-#define NUM_CULL_BUCKETS 16
+#define MAX_DIST 40.f
+#define NUM_CULL_BUCKETS 12
 
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout(set = 0, binding = 0) uniform CameraBufferObject {
     mat4 view;
     mat4 proj;
+    vec3 eye;
 } camera;
 
 layout(set = 1, binding = 0) uniform Time {
@@ -54,6 +55,79 @@ bool inBounds(float value, float bounds) {
     return (value >= -bounds) && (value <= bounds);
 }
 
+// FUNCTIONS FOR WIND
+// these are modified from this shadertoy implementing Gerstner waves: https://www.shadertoy.com/view/MtVcW1
+
+float hash( vec2 uv )
+{
+    return fract( sin( uv.x * 452.153 + uv.y * 542.515 ) * 215.15 );
+
+}
+
+float noise( vec2 uv )
+{
+    
+    vec2 id = floor( uv );
+    vec2 lv = fract( uv );
+    lv *= lv * lv * ( 3.0 - 2.0 * lv );
+    
+    float bl = hash( id );
+    float br = hash( id + vec2( 1, 0 ) );
+    float b = mix( bl, br, lv.x );
+    
+    float tl = hash( id + vec2( 0, 1 ) );
+    float tr = hash( id + vec2( 1 ) );
+    float t = mix( tl, tr, lv.x );
+    
+    return mix( b, t, lv.y ); 
+}
+
+float ger (vec2 uv, float time)
+{
+    float ste = 1.5;
+    float amp = 0.7;
+    float wav = 1.9;
+    float spe = 1.5;
+    uv.x *= 0.1;
+    uv.y *= 0.3;
+    uv.x += 1.0 * amp * cos( uv.x - time * spe + ( uv.x + uv.y ) + noise( uv + time ) );
+    uv.y += ste * amp * sin( uv.y - time * spe * 0.5 + ( uv.x + uv.y ) + noise( uv + 5.0 + time ) );
+    float c = 0.3 * sin( wav * ( amp ) * ( uv.x + uv.y ) + time );
+    
+    return c;
+}
+
+float fbm(vec2 uv, float time)
+{
+
+    float res = 0.0, amp = 1.0, fre = 1.0, div = 0.0;
+    
+    for( int i = 0; i < 10; ++i )
+    {
+    
+        res += amp * ger( ( uv + time ) * fre , time);
+        div += amp;
+        time *= 0.7;
+        amp *= 0.5;
+        fre *= 2.0;
+    }
+    res /= div;
+    return res;
+}
+
+vec3 getWind(vec2 uv, float time)
+{
+    vec2 baseDir = normalize(vec2(1.2, 0.8));
+    
+    float windGer = ger(uv * 0.3 + time * 1.5, time) * 2.0;
+    vec2 windDir = normalize(baseDir + 0.3 * vec2(windGer, windGer * 0.7)) * 1.5;
+
+    float intensity = fbm(uv * 0.1 + time * 0.8, time);
+    float magnitude = 3.0 + 12.0 * intensity;
+
+    return vec3(windDir.x, 0.1 * intensity, windDir.y) * magnitude;
+}
+
 void main() {
 	// Reset the number of blades to 0
     uint bladeIndex = gl_GlobalInvocationID.x;
@@ -65,17 +139,53 @@ void main() {
     Blade blade = inputBlades.blades[bladeIndex];
     float angle = blade.v0.w;
     vec3 dirVec = vec3(cos(angle), 0.0, sin(angle));
-    vec3 eye = vec3(-camera.view[3][0], -camera.view[3][1], -camera.view[3][2]);
+    float height = blade.v1.w;
     
 
     // TODO: Apply forces on every blade and update the vertices in the buffer
+    // GRAVITY
+    vec4 D = vec4(0, -1, 0, 9.8);
+    vec3 gravEnv = normalize(D.xyz) * D.w;
+    vec3 gravFront = 0.25 * length(gravEnv) * dirVec;
+    vec3 gravity = gravEnv + gravFront;
+
+    // RECOVERY
+    vec3 initv2 = height * normalize(blade.up.xyz) + blade.v0.xyz;
+    vec3 recovery = (initv2 - blade.v2.xyz) * blade.up.w;
+
+    // WIND
+    vec3 windDir = getWind(blade.v0.xz, totalTime);//vec3(20.5, 0.0, 10.5);
+    float windAlign = 1.f - abs(dot(normalize(windDir), normalize(blade.v2.xyz - blade.v0.xyz)));
+    float heightRatio = dot(blade.v2.xyz - blade.v0.xyz, blade.up.xyz) / height;
+    float alignmentVal = heightRatio * windAlign;
+    vec3 wind = windDir * alignmentVal;
+
+    // APPLY FORCES
+    blade.v2 += vec4((gravity + recovery + wind) * deltaTime, 0.f);
+    float lProj = length(blade.v2.xyz - blade.v0.xyz - blade.up.xyz * (dot(blade.v2.xyz - blade.v0.xyz, blade.up.xyz)));
+    blade.v1 = vec4(blade.v0.xyz + height * blade.up.xyz * max(1 - lProj / height, 0.05 * max(lProj / height, 1)), blade.v1.w);
+    float L0 = length(blade.v2.xyz - blade.v0.xyz);
+    float L1 = length(blade.v2.xyz - blade.v1.xyz) + length(blade.v1.xyz - blade.v0.xyz);
+    float L = (2 * L0 + L1) / 3;
+    float r = height / L;
+    vec3 v1_corr = blade.v0.xyz + r * (blade.v1.xyz - blade.v0.xyz);
+    vec3 v2_corr = v1_corr + r * (blade.v2.xyz - blade.v1.xyz);
+
+    blade.v1 = vec4(v1_corr, blade.v1.w);
+    blade.v2 = vec4(v2_corr, blade.v2.w);
+
+    // feed it back to input blades
+    inputBlades.blades[bladeIndex] = blade;
 
 	// TODO: Cull blades that are too far away or not in the camera frustum and write them
 	// to the culled blades buffer
     // ORIENTATION CULLING
 #ifdef IS_CULLING_ORI
-    vec3 front = vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2]);
-    if (abs(dot(dirVec, front)) > 0.9)
+    // NOTE: instead of camera front vector, I get a vector to the grass in the view space
+    //vec3 front = vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2]);
+    vec3 viewDir = normalize((camera.view * vec4(dirVec.xyz, 0.0)).xyz);
+    vec3 viewOrig = normalize((camera.view * vec4(blade.v0.xyz, 1.0)).xyz);
+    if (abs(dot(viewDir, viewOrig)) > 0.9)
     {
         return;
     };
@@ -92,7 +202,7 @@ void main() {
 #endif
 #ifdef IS_CULLING_DIST
     // DISTANCE CULLING
-    float dist_Proj = length(blade.v0.xyz - eye - blade.up.xyz * dot((blade.v0.xyz - eye), blade.up.xyz));
+    float dist_Proj = length(blade.v0.xyz - camera.eye - blade.up.xyz * dot((blade.v0.xyz - camera.eye), blade.up.xyz));
     if (bladeIndex % NUM_CULL_BUCKETS > floor(NUM_CULL_BUCKETS * (1 - dist_Proj / MAX_DIST)))
     {
         return;
