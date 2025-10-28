@@ -3,12 +3,12 @@
 
 #define WORKGROUP_SIZE 32
 
-#define IS_CULLING_ORI false
+#define IS_CULLING_ORI true
 #define IS_CULLING_FRUST true
 #define IS_CULLING_DIST true
 
 #define TOLERANCE 0.2f
-#define MAX_DIST 40.f
+#define MAX_DIST 60.f
 #define NUM_CULL_BUCKETS 12
 
 layout(local_size_x = WORKGROUP_SIZE, local_size_y = 1, local_size_z = 1) in;

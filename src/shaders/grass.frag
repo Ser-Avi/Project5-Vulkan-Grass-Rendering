@@ -17,7 +17,7 @@ layout(location = 0) out vec4 outColor;
 void main() {
     // TODO: Compute fragment color
     vec3 lightDir = normalize(vec3(4.5, 6.5, -1.5));
-    vec3 green = vec3(0.2, 0.8, 0.2);
+    vec3 green = vec3(0.4, 0.8, 0.2);
     float light = max(0.3, abs(dot(fs_nor, lightDir)));
     outColor = vec4(green * light, 1.0);
 
