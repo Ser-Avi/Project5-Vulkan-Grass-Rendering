@@ -3,9 +3,13 @@
 
 #define WORKGROUP_SIZE 32
 
-#define IS_CULLING_ORI true
-#define IS_CULLING_FRUST true
-#define IS_CULLING_DIST true
+#define IS_WIND 1
+#define IS_GRAVITY 1
+#define IS_FORCE 1
+
+#define IS_CULLING_ORI 1
+#define IS_CULLING_FRUST 1
+#define IS_CULLING_DIST 1
 
 #define TOLERANCE 0.2f
 #define MAX_DIST 60.f
@@ -144,22 +148,31 @@ void main() {
 
     // TODO: Apply forces on every blade and update the vertices in the buffer
     // GRAVITY
+#if IS_GRAVITY && IS_FORCE
     vec4 D = vec4(0, -1, 0, 9.8);
     vec3 gravEnv = normalize(D.xyz) * D.w;
     vec3 gravFront = 0.25 * length(gravEnv) * dirVec;
     vec3 gravity = gravEnv + gravFront;
+#else
+    vec3 gravity = vec3(0.f);
+#endif
 
     // RECOVERY
     vec3 initv2 = height * normalize(blade.up.xyz) + blade.v0.xyz;
     vec3 recovery = (initv2 - blade.v2.xyz) * blade.up.w;
 
+#if IS_WIND && IS_FORCE
     // WIND
     vec3 windDir = getWind(blade.v0.xz, totalTime);//vec3(20.5, 0.0, 10.5);
     float windAlign = 1.f - abs(dot(normalize(windDir), normalize(blade.v2.xyz - blade.v0.xyz)));
     float heightRatio = dot(blade.v2.xyz - blade.v0.xyz, blade.up.xyz) / height;
     float alignmentVal = heightRatio * windAlign;
     vec3 wind = windDir * alignmentVal;
+#else
+    vec3 wind = vec3(5.2, 4.0, 3.2);
+#endif
 
+#if IS_FORCE
     // APPLY FORCES
     blade.v2 += vec4((gravity + recovery + wind) * deltaTime, 0.f);
     float lProj = length(blade.v2.xyz - blade.v0.xyz - blade.up.xyz * (dot(blade.v2.xyz - blade.v0.xyz, blade.up.xyz)));
@@ -176,11 +189,12 @@ void main() {
 
     // feed it back to input blades
     inputBlades.blades[bladeIndex] = blade;
+#endif
 
 	// TODO: Cull blades that are too far away or not in the camera frustum and write them
 	// to the culled blades buffer
     // ORIENTATION CULLING
-#ifdef IS_CULLING_ORI
+#if IS_CULLING_ORI
     // NOTE: instead of camera front vector, I get a vector to the grass in the view space
     //vec3 front = vec3(camera.view[0][2], camera.view[1][2], camera.view[2][2]);
     vec3 viewDir = normalize((camera.view * vec4(dirVec.xyz, 0.0)).xyz);
@@ -190,7 +204,7 @@ void main() {
         return;
     };
 #endif
-#ifdef IS_CULLING_FRUST
+#if IS_CULLING_FRUST
     // FRUSTRUM CULLING
     vec3 mid = 0.25 * blade.v0.xyz + 0.5 * blade.v1.xyz + 0.25 * blade.v2.xyz;
     vec4 midPrime = camera.proj * camera.view * vec4(mid.xyz, 1.0);
@@ -200,7 +214,7 @@ void main() {
         return;
     }
 #endif
-#ifdef IS_CULLING_DIST
+#if IS_CULLING_DIST
     // DISTANCE CULLING
     float dist_Proj = length(blade.v0.xyz - camera.eye - blade.up.xyz * dot((blade.v0.xyz - camera.eye), blade.up.xyz));
     if (bladeIndex % NUM_CULL_BUCKETS > floor(NUM_CULL_BUCKETS * (1 - dist_Proj / MAX_DIST)))
